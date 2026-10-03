@@ -1,90 +1,88 @@
 const express = require('express');
-const axios = require('axios');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const cors = require('cors');
 
 const app = express();
 
-// CORS ve Body Parser Middleware Ayarları
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Tüm istekleri karşılayan ana işleyici
-app.all('*', async (req, res) => {
-  // 1. CORS Preflight istekleri için hızlı yanıt
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  // 2. Sadece POST ve PATCH kabul et (Diğer methodları doğrudan reddet)
-  if (!['POST', 'PATCH'].includes(req.method)) {
-    return res.status(405).json({
-      error: 'Metod izin verilmedi! Bu proxy servisi sadece POST ve PATCH isteklerini kabul eder.'
-    });
-  }
-
+app.post('*', async (req, res) => {
   try {
-    // Safety check: req.body undefined ise boş obje ata (Çökmeyi önler)
-    const body = req.body || {};
+    // BDFD'den veya Header'dan gelecek parametreler
+    const token = req.headers['authorization']?.replace('Bot ', '') || req.body.token;
+    const channelId = req.headers['x-channel-id'] || req.body.channelId;
+    const messageId = req.headers['x-message-id'] || req.body.messageId;
+    const buttonsData = req.body.buttons || []; // Buton dizisi
 
-    // Header veya Body üzerinden parametreleri al
-    const targetUrl = req.headers['x-target-url'] || body.targetUrl;
-    const targetMethod = (req.headers['x-target-method'] || body.targetMethod || 'POST').toUpperCase();
-
-    // Hedef URL Doğrulaması
-    if (!targetUrl) {
-      return res.status(400).json({ 
-        error: 'Hedef URL bulunamadı! Lütfen "x-target-url" header\'ı veya body içinde "targetUrl" belirtin.' 
+    // Zorunlu alan kontrolleri
+    if (!token || !channelId || !messageId) {
+      return res.status(400).json({
+        error: 'Eksik parametre! "token", "channelId" ve "messageId" zorunludur.'
       });
     }
 
-    if (!['POST', 'PATCH'].includes(targetMethod)) {
-      return res.status(400).json({ 
-        error: 'Geçersiz hedef metod! Sadece POST veya PATCH desteklenmektedir.' 
-      });
-    }
-
-    // Proxy verisini hazırlama (Kontrol değişkenlerini temizle)
-    const payload = { ...body };
-    delete payload.targetUrl;
-    delete payload.targetMethod;
-
-    // Hedefe gönderilecek başlıkları (Headers) hazırlama
-    const forwardHeaders = {
-      'Content-Type': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Vercel-Serverless-Proxy)'
-    };
-
-    // İstemciden (BDFD) gelen Authorization başlığı varsa bunu hedef servise aktar
-    if (req.headers['authorization']) {
-      forwardHeaders['Authorization'] = req.headers['authorization'];
-    }
-
-    // Hedef URL'ye Axios ile istek gönderme
-    const response = await axios({
-      method: targetMethod,
-      url: targetUrl,
-      data: payload,
-      headers: forwardHeaders,
-      timeout: 8000 // Vercel Free planı timeout sınırı için güvenli alan (8s)
+    // Geçici bir Discord Client oluşturuyoruz
+    const client = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages
+      ]
     });
 
-    // Başarılı yanıtı döndür
-    return res.status(response.status).json(response.data);
+    // Bot giriş yapıp hazır olduğunda çalışacak mantık
+    client.once('ready', async () => {
+      try {
+        const channel = await client.channels.fetch(channelId);
+        if (!channel) {
+          await client.destroy();
+          return res.status(444).json({ error: 'Kanal bulunamadı!' });
+        }
+
+        const message = await channel.messages.fetch(messageId);
+        if (!message) {
+          await client.destroy();
+          return res.status(404).json({ error: 'Mesaj bulunamadı!' });
+        }
+
+        // Butonları oluşturma (ActionRow)
+        const row = new ActionRowBuilder();
+        
+        if (Array.isArray(buttonsData) && buttonsData.length > 0) {
+          buttonsData.forEach(btn => {
+            const button = new ButtonBuilder()
+              .setCustomId(btn.customId || 'btn_default')
+              .setLabel(btn.label || 'Buton')
+              .setStyle(btn.style || ButtonStyle.Primary); // 1: Primary, 2: Secondary, 3: Success, 4: Danger
+
+            if (btn.emoji) button.setEmoji(btn.emoji);
+
+            row.addComponents(button);
+          });
+        }
+
+        // Mesajı butonlar ile güncelleme
+        await message.edit({
+          components: [row]
+        });
+
+        // İstemci oturumunu kapat ve yanıt dön
+        await client.destroy();
+        return res.status(200).json({ success: true, message: 'Butonlar başarıyla eklendi!' });
+
+      } catch (err) {
+        await client.destroy();
+        return res.status(500).json({ error: 'Discord.js işlemi sırasında hata:', details: err.message });
+      }
+    });
+
+    // Bot oturumunu başlat
+    await client.login(token);
 
   } catch (error) {
-    if (error.response) {
-      // Hedef sunucudan gelen hatayı ilet (Örn: Discord 401/400 hataları)
-      return res.status(error.response.status).json({
-        proxyError: true,
-        status: error.response.status,
-        data: error.response.data
-      });
-    }
-
-    // Sunucu/Ağ Hatası
     return res.status(500).json({
-      error: 'İstek iletilirken bir sunucu hatası oluştu.',
+      error: 'Sunucu hatası veya geçersiz Token!',
       details: error.message
     });
   }
