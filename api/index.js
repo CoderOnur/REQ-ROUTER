@@ -49,15 +49,23 @@ app.all('*', async (req, res) => {
     delete payload.targetUrl;
     delete payload.targetMethod;
 
+    // Hedefe gönderilecek başlıkları (Headers) hazırlama
+    const forwardHeaders = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Vercel-Serverless-Proxy)'
+    };
+
+    // İstemciden (BDFD) gelen Authorization başlığı varsa bunu hedef servise aktar
+    if (req.headers['authorization']) {
+      forwardHeaders['Authorization'] = req.headers['authorization'];
+    }
+
     // Hedef URL'ye Axios ile istek gönderme
     const response = await axios({
       method: targetMethod,
       url: targetUrl,
       data: payload,
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Vercel-Serverless-Proxy)'
-      },
+      headers: forwardHeaders,
       timeout: 8000 // Vercel Free planı timeout sınırı için güvenli alan (8s)
     });
 
@@ -66,7 +74,7 @@ app.all('*', async (req, res) => {
 
   } catch (error) {
     if (error.response) {
-      // Hedef sunucudan gelen hatayı ilet
+      // Hedef sunucudan gelen hatayı ilet (Örn: Discord 401/400 hataları)
       return res.status(error.response.status).json({
         proxyError: true,
         status: error.response.status,
