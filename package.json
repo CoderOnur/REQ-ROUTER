@@ -1,14 +1,14 @@
 {
-  "name": "vercel-post-proxy",
+  "name": "req-router",
   "version": "1.0.0",
-  "description": "Vercel üzerinde çalışan POST/PATCH istek yönlendirici proxy",
+  "description": "BDFD Discord.js Button Injector",
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js"
   },
   "dependencies": {
-    "axios": "^1.6.8",
     "cors": "^2.8.5",
+    "discord.js": "^14.14.1",
     "express": "^4.19.2"
   }
 }
